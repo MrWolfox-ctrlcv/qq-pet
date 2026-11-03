@@ -1,0 +1,37 @@
+{
+  "name": "qq-pet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "build": "npm run build --workspace apps/web",
+    "test": "node --test tests/*.test.ts",
+    "check": "tsc --noEmit",
+    "import:legacy": "node scripts/import-legacy.ts",
+    "create:pet": "node scripts/create-pet.ts",
+    "setup:bridge": "node scripts/setup-native-bridge.ts"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/win32-x64": "^4.1.0",
+    "@ffprobe-installer/win32-x64": "^5.1.0",
+    "@huggingface/transformers": "^4.3.1",
+    "sharp": "0.35.5",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "~5.9.3"
+  },
+  "description": "Local QQ AI pets, management panel and native client bridge"
+}

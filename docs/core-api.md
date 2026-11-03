@@ -1,0 +1,27 @@
+# Core and OneBot transport API
+
+All exports are dependency-light TypeScript and use Node 24 native TS support.
+
+## Events and context
+
+`EventSequencer.next(rawOneBotEvent, accountId?)` creates a `NormalizedEvent` with a stable SHA-256 id scoped to `(chatId, sourceId)`. Chat IDs are namespaced (`group:123`, `private:123`) so equal numeric IDs in different chat types cannot collide. It preserves author identity, converts seconds or milliseconds to epoch milliseconds (missing/invalid values use receive time), assigns a monotonically increasing local sequence, and normalizes text/media/reply segments while retaining provider metadata. `normalizeOneBotEvent(raw, {petId?, sequence, selfId?, accountId?})` is available when a coordinator owns sequence assignment. `petId` is accepted for integration symmetry; pet scoping belongs in the caller's storage key.
+
+`buildContext(trigger, history, replyResolver?, limit?)` includes only the trigger chat and events whose sequence is at or below the trigger watermark. The trigger's author is preserved. It does not infer image ownership from nearby messages. Explicit reply references are fetched by `(chatId, messageId)` and returned separately with `explicit-reply-fetch` provenance.
+
+`ResponseDecider(selfId, masterIds, remote?, intervalMs?, now?)` handles @self and @master locally, even during remote cooldown. Private messages reply directly unless explicitly @ing another account. Explicit unrelated mentions remain quiet. Only unaddressed group messages can reach the optional remote FlashLite hook, with per-chat throttling.
+
+## Transport
+
+```ts
+const transport = new OneBotTransport({
+  url: 'ws://127.0.0.1:3001', accessToken: process.env.ONEBOT_TOKEN,
+  expectedAccountId: configuredAccountId,
+});
+transport.onEvent = event => coordinator.accept(event);
+await transport.connect(); // resolves only after get_login_info identity check
+const status = await transport.getStatus();
+const receipt = await transport.sendMessage({message_type:'group',group_id:'...',message:'...'}, stableResponseKey);
+await transport.stop();
+```
+
+Connection states are `connecting`, `online`, `reconnecting`, `account-mismatch`, `disconnected`, and `stopped`. WebSocket pong/OneBot heartbeat timestamps track connection liveness independently of group conversation activity; heartbeat events also recheck provider status. The adapter checks both login identity and `get_status` health before becoming online. Reconnect delay is exponential and capped; `maxRetries` may bound attempts. Account mismatch rejects initial connect and gates all sends. `sendMessage` is idempotent per process by caller-supplied key and returns success only after a successful action response with a nonempty message ID. A timeout or disconnect after a send begins returns `uncertain`; do not blindly retry it. Persist response keys across restarts in the coordinator. `getLoginInfo()` and `getStatus()` map to `get_login_info` and `get_status`. The adapter uses OneBot-compatible actions and can connect to a separately licensed LagrangeGo provider; it contains no provider-specific implementation.

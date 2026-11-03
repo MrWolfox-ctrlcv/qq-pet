@@ -1,0 +1,11 @@
+QQ Pet
+Copyright 2026 QQ Pet contributors
+
+The original application, web panel and native bridge source in this repository
+are licensed under the Apache License, Version 2.0.
+
+Dependencies, external model weights, QQ itself and user-provided media retain
+their respective licenses. They are not relicensed by this NOTICE and their
+binaries, weights, login state and private media are not included here.
+
+See THIRD_PARTY.md for dependency references and component boundaries.

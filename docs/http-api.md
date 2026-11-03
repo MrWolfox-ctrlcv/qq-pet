@@ -1,0 +1,11 @@
+# HTTP API
+
+The server listens on `127.0.0.1:4780` by default. Set `PET_DATA_DIR`, `PET_HOST`, and `PET_PORT` to override. All management routes require a session cookie; mutations also require its `X-CSRF-Token`. Responses use `{data: ...}` or `{error:{code,message}}`. `/api/health` is public and returns only `{data:{status:"ok"}}`.
+
+Login with `POST /api/login` and `{token}`. The token is stored in the private data directory's `admin-token.txt`; the response supplies the CSRF token. `GET /api/session` refreshes session state. `POST /api/logout` clears it. The browser must send same-origin requests; there is no permissive CORS policy.
+
+Pet routes include `GET /api/pets`, `GET/PATCH /api/pets/:petId`, status/control, connection, assets, memories, people, messages, traces, audit, preview, and model test. Entity collection routes are `/api/pets/:petId/assets`, `/memories`, and `/people`. Item routes use the scoped form `/api/pets/:petId/{assets|memories|people}/:id` for GET/PATCH/DELETE; media is available at `/api/pets/:petId/assets/:id/media`. Mutations include `version`. Global compatibility item routes require `petId` in the request body to prevent same-ID records in different pets from crossing. Stale versions return HTTP 409. DELETE for assets and memories hides the record for restoration. Asset uploads accept base64 image bytes, up to 12 MiB decoded; the store decodes the image before saving. Media reads resolve only the store's internal content-addressed filename.
+
+`GET /api/revisions?petId=&entityType=&entityId=` reads history; `POST /api/revisions/:revisionId/restore` takes `{petId,entityType,entityId,version}`. Private connection settings use `GET/PATCH /api/pets/:petId/private-config` (or `/connection`); GET returns sanitized connection and model fields, secret values are never returned, and blank key fields preserve existing secrets.
+
+`GET/POST /api/backups` lists or creates online SQLite backups with media. Restore is `POST /api/backups/:id/restore` with `{confirmation:"RESTORE"}`. Restore only accepts IDs in the backup manifest and creates a fresh pre-restore backup before replacing the database. The `apps/web/dist` build is served as the SPA, with path traversal rejected.
