@@ -5,6 +5,7 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const prepareImage = require('./native-image-send.cjs');
+const resolveReply = require('./native-reply.cjs');
 const MAX_REQUEST=72*1024*1024;
 
 module.exports = function startProvider(configFile) {
@@ -81,7 +82,7 @@ module.exports = function startProvider(configFile) {
     if(nativeUid)uinToUid.set(author,nativeUid);
     if(!references.has(String(raw.msgId))) {
       remember(references,String(raw.msgId),{accountId,sourceId:String(raw.msgId),chatType:Number(raw.chatType),
-        peerUid:String(raw.peerUid),authorUin:author,authorUid:nativeUid},4096);
+        peerUid:String(raw.peerUid),msgSeq:String(raw.msgSeq||''),authorUin:author,authorUid:nativeUid},4096);
       saveReferences();
     }
     const content=[];
@@ -102,8 +103,10 @@ module.exports = function startProvider(configFile) {
         remember(media,key,{raw,element:el},1024);
         content.push({type:'image',data:{file:key}});
       } else if(el.elementType===7 && el.replyElement) {
-        const id=el.replyElement.replayMsgId || el.replyElement.replyMsgId || '';
-        if(id)content.push({type:'reply',data:{id:String(id)}});
+        const records=new Map([...references.values()].map(row=>[row.sourceId,row]));
+        for(const row of rawCache.values())records.set(String(row.msgId),row);
+        const id=resolveReply(raw,el.replyElement,records.values());
+        content.push({type:'reply',data:{id,unresolved:!id,sequence:String(el.replyElement.replayMsgSeq||'')}});
       } else content.push({type:'native',data:{element_type:el.elementType}});
     }
     const group=Number(raw.chatType)===2;

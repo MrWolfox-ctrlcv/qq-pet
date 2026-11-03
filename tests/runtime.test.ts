@@ -185,3 +185,22 @@ test('recent prompt context and tool history are bounded and clipping is recorde
   const current=historyInputs.find((m:any)=>m.content.includes('"relation":"current"'));assert.ok(current);assert.match(current.content,/"senderId":"42"/);
   const historyTool=trace.messages.find((m:any)=>typeof m.content==='string'&&m.content.includes('"tool":"HISTORY"'));assert.ok(historyTool);const toolPayload=JSON.parse(historyTool.content).toolResults[0];assert.ok(toolPayload.chars<=2400);assert.ok(toolPayload.messages.length<=8);
 });
+
+
+test('separate image then describe request reads that actual image with original attribution',async t=>{
+  const bytes=await sharp({create:{width:15,height:10,channels:3,background:'#008800'}}).png().toBuffer();const previous=globalThis.fetch;let downloads=0;
+  globalThis.fetch=async()=>{downloads++;return new Response(bytes)};t.after(()=>{globalThis.fetch=previous});
+  const f=await fixture(t,{modelHandler:messages=>Array.isArray(messages[0]?.content)?'图中是绿色黑板，上面有白色文字。':'这是一块绿色黑板。'});
+  f.emit({message_id:'own-photo',group_id:7,user_id:42,message:[{type:'image',data:{url:'https://a.qpic.cn/own.png'}}]});
+  await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='own-photo'));
+  f.emit({message_id:'describe-own',group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:'描述图片'}}]});
+  await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='describe-own'&&t.state==='sent'));
+  const trace=f.store.listTraces('pet').find(t=>t.triggerId==='describe-own');const observation=trace.messages.map((m:any)=>{try{return JSON.parse(m.content)}catch{return {}}}).find((x:any)=>x.relation==='recent-image-reference-media');
+  assert.equal(downloads,1);assert.equal(observation.sourceMessageId,'own-photo');assert.equal(observation.originalSenderId,'42');assert.equal(observation.delivery,'native-image-input');const input=f.models.captured.flat().find((m:any)=>Array.isArray(m.content)&&m.content.some((p:any)=>p.type==='image_url'));assert.ok(input);assert.equal(Buffer.from(input.content[0].image_url.url.split(',')[1],'base64').compare(bytes),0);assert.equal(f.models.kinds.includes('image-analysis'),false);assert.ok(trace.contextBudget.mediaReserveChars>0);
+});
+
+test('image question with multiple other authors requests clarification without downloading an arbitrary image',async t=>{
+  const f=await fixture(t);for(const uid of [11,12]){f.emit({message_id:'photo-'+uid,group_id:7,user_id:uid,message:[{type:'image',data:{file:'native-image:'+uid}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='photo-'+uid));}
+  f.emit({message_id:'ambiguous-image',group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:'描述图片'}}]});await until(()=>f.sent.length===1);
+  const input=f.models.captured.flat().map((m:any)=>String(m.content)).join('\n');assert.match(input,/image-reference-unresolved/);assert.match(input,/ambiguous/);assert.equal(f.actions.filter(a=>a.action==='get_image').length,0);
+});

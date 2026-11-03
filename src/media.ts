@@ -114,11 +114,24 @@ export class MediaTools {
     return {asset,bytes,referenceIds:[...referenceIds],prompt};
   }
   async analyzeIncomingImage(petId:string,url:string){const downloaded=await this.#download(url,12*1024*1024);const cached=this.#getAnalysis(petId,downloaded.hash,'image');if(cached)return {description:cached,cached:true,hash:downloaded.hash};const meta=await sharp(downloaded.bytes).metadata();if(!['jpeg','png','webp','gif'].includes(meta.format||''))throw new Error('Unsupported image format');const model=this.privateConfig.get(petId).model;const b64=downloaded.bytes.toString('base64');const result=await this.models.call(petId,model,[{role:'user',content:[{type:'text',text:'Describe only visible image content, briefly and factually. Do not identify people or infer private attributes.'},{type:'image_url',image_url:{url:`data:image/${meta.format};base64,${b64}`}}]}],{model:model.visionModel||'gemini-3.5-flash-lite',kind:'vision'});this.#saveAnalysis(petId,downloaded.hash,'image',result.text);return {description:result.text,cached:false,hash:downloaded.hash};}
-  async incomingImageBytes(segment:any,transport:ReadTransport){
+  async incomingImageBytes(segment:any,transport:ReadTransport,maxBytes=12*1024*1024){
     if(segment?.type!=='image')throw new Error('Only an actual image segment can be collected');
     let url=String(segment.url??segment.fileUrl??'');let resolved=false;
     if(!url){const token=String(segment.fileId??segment.file??'');if(!token)throw new Error('Image has no provider reference');const result=await transport.readAction('get_image',{file:token,full_size:true});url=String(result?.url??result?.file??'');resolved=true;}
-    return (resolved&&path.isAbsolute(url)?this.#providerFile(url,12*1024*1024):await this.#download(url,12*1024*1024)).bytes;
+    return (resolved&&path.isAbsolute(url)?this.#providerFile(url,maxBytes):await this.#download(url,maxBytes)).bytes;
+  }
+  async incomingImageInput(segment:any,transport:ReadTransport,detail=false){
+    const bytes=await this.incomingImageBytes(segment,transport,25*1024*1024),metadata=await sharp(bytes,{limitInputPixels:60_000_000}).metadata();
+    if(!['jpeg','png','webp','gif'].includes(metadata.format||''))throw new Error('Unsupported image format');
+    const content:any[]=[{type:'image_url',image_url:{url:`data:image/${metadata.format};base64,${bytes.toString('base64')}`,detail:detail?'high':'auto'}}];
+    if(detail&&((metadata.width||0)>1400||(metadata.height||0)>1400)){
+      const w=metadata.width!,h=metadata.height!,cw=Math.ceil(w*.55),ch=Math.ceil(h*.55);
+      for(const [left,top] of [[0,0],[w-cw,0],[0,h-ch],[w-cw,h-ch]]){
+        const crop=await sharp(bytes).extract({left,top,width:cw,height:ch}).resize({width:1600,height:1600,fit:'inside',withoutEnlargement:true}).jpeg({quality:94}).toBuffer();
+        content.push({type:'image_url',image_url:{url:'data:image/jpeg;base64,'+crop.toString('base64'),detail:'high'}});
+      }
+    }
+    return {content,width:metadata.width,height:metadata.height,bytes:bytes.length,hash:createHash('sha256').update(bytes).digest('hex')};
   }
   async analyzeIncomingMedia(petId:string,segment:any,source:IncomingSource,transport:ReadTransport,options:{detail?:boolean;question?:string}={}){
     const type=String(segment?.type??'');if(!['image','audio','record','video'].includes(type))throw new Error('Incoming segment is not supported media');
