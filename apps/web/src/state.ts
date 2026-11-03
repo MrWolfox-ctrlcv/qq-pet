@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 
 type Pet = { id: string; name: string; accountId: string; prompts: Record<string, string>; settings: Record<string, any>; version: number; updatedAt: string }
 type Row = Record<string, any>
-export const csrf = ref(''), authenticated = ref(false), token = ref(''), pets = ref<Pet[]>([]), petId = ref(''), pet = ref<Pet | null>(null), page = ref('overview'), data = ref<Row[]>([]), error = ref(''), notice = ref(''), search = ref(''), categoryFilter = ref(''), scopeFilter = ref(''), selected = ref<Row | null>(null), form = ref<Row>({}), preview = ref(''), previewResult = ref<Row | null>(null), status = ref<Row | null>(null), backups = ref<Row[]>([]), connection = ref<Row>({ connection: {}, model: {} }), revisions = ref<Row[]>([]), traces = ref<Row[]>([]), modelTest = ref(''), summaries = ref<Row[]>([]), contextInfo = ref<Row>({})
+export const csrf = ref(''), authenticated = ref(false), token = ref(''), pets = ref<Pet[]>([]), petId = ref(''), pet = ref<Pet | null>(null), page = ref('overview'), data = ref<Row[]>([]), error = ref(''), notice = ref(''), search = ref(''), categoryFilter = ref(''), scopeFilter = ref(''), selected = ref<Row | null>(null), form = ref<Row>({}), preview = ref(''), previewResult = ref<Row | null>(null), status = ref<Row | null>(null), backups = ref<Row[]>([]), connection = ref<Row>({ connection: {}, model: {} }), revisions = ref<Row[]>([]), traces = ref<Row[]>([]), modelTest = ref(''), summaries = ref<Row[]>([]), contextInfo = ref<Row>({}), personalityInfo = ref<Row>({}), personalityBusy = ref(false)
 export const nav = [['overview', '运行总览', '◉'], ['prompt', 'Pet 与提示词', '✎'], ['gallery', '图库', '▧'], ['stickers', '表情包', '☻'], ['memories', '记忆', '◷'], ['people', '人物与画像', '♙'], ['chat', '聊天检查', '▤'], ['settings', '设置与备份', '⚙']]
 export const currentPet = computed(() => pets.value.find(item => item.id === petId.value) || null)
 
@@ -25,6 +25,7 @@ export async function loadPage() {
   if (!petId.value) return
   error.value = ''
   try {
+    personalityInfo.value=await api(`/api/pets/${petId.value}/personalities`);
     if (page.value === 'overview') status.value = await api(`/api/pets/${petId.value}/status`)
     else if (page.value === 'chat') { data.value = await api(`/api/pets/${petId.value}/messages?limit=100`); traces.value = await api(`/api/pets/${petId.value}/traces`); summaries.value = await api(`/api/pets/${petId.value}/summaries`); contextInfo.value = await api(`/api/pets/${petId.value}/context`) }
     else if (collectionPath.value) data.value = await api(`/api/pets/${petId.value}/${collectionPath.value}`)
@@ -45,7 +46,7 @@ export function openEdit(row?: Row) {
 }
 export async function saveRow() { if (!petId.value) return; try { const path = ['gallery', 'stickers'].includes(page.value) ? 'assets' : page.value; const url = `/api/pets/${petId.value}/${path}${selected.value?.id ? `/${selected.value.id}` : ''}`; const payload = selected.value?.id ? { ...form.value, version: selected.value.version } : { ...form.value }; await api(url, selected.value?.id ? 'PATCH' : 'POST', payload); notice.value = '已保存'; selected.value = null; await loadPage() } catch (cause: any) { error.value = cause.message } }
 export async function hideRow(row: Row) { try { const path = ['gallery', 'stickers'].includes(page.value) ? 'assets' : page.value; const url = `/api/pets/${petId.value}/${path}/${row.id}`; if (row.hidden) await api(url, 'PATCH', { version: row.version, hidden: false }); else await api(url, 'DELETE', { version: row.version }); await loadPage() } catch (cause: any) { error.value = cause.message } }
-export async function savePet() { if (!pet.value) return; try { pet.value = await api(`/api/pets/${petId.value}`, 'PATCH', { version: pet.value.version, prompts: pet.value.prompts, settings: pet.value.settings }); notice.value = '已保存'; await loadPage() } catch (cause: any) { error.value = cause.message; if (cause.message.includes('409')) await loadPet() } }
+export async function savePet() { if (!pet.value) return; try { pet.value = await api(`/api/pets/${petId.value}`, 'PATCH', { version: pet.value.version, name:pet.value.name, prompts: pet.value.prompts, settings: pet.value.settings }); notice.value = '已保存'; pets.value=await api('/api/pets');await loadPage() } catch (cause: any) { error.value = cause.message; if (cause.message.includes('409')) await loadPet() } }
 export async function saveTools(settings:Record<string,any>) { if(!pet.value)return;try{pet.value=await api(`/api/pets/${petId.value}`,'PATCH',{version:pet.value.version,settings});notice.value='工具设置已保存，立即生效'}catch(cause:any){error.value=cause.message} }
 export async function previewPrompt() { try { previewResult.value = await api<any>(`/api/pets/${petId.value}/preview`, 'POST', { text: preview.value || '你好' }); notice.value = `本地预览完成 · prompt 版本 ${previewResult.value?.promptVersion ?? '当前'} · 未调用模型` } catch (cause: any) { error.value = cause.message } }
 export async function testModel() { try { const result = await api(`/api/pets/${petId.value}/test-model`, 'POST', { text: modelTest.value }); notice.value = '模型测试完成；接口约束为不执行外部动作'; data.value = [result] } catch (cause: any) { error.value = cause.message } }
@@ -58,3 +59,5 @@ export async function restore(backup: Row) { if (!confirm('确定恢复此备份
 
 export async function saveContext(settings:Row){if(!pet.value)return;try{pet.value=await api(`/api/pets/${petId.value}`,'PATCH',{version:pet.value.version,settings});notice.value='上下文设置已保存，下轮生效'}catch(cause:any){error.value=cause.message}}
 export async function compactContext(topicId:string){try{const result=await api(`/api/pets/${petId.value}/context/compact`,'POST',{topicId});notice.value=result.applied?'较早内容已压缩，原文保留':result.failed?'压缩失败，原文保持可用':'暂未压缩：'+(result.skipped||'没有符合条件的旧内容');await loadPage()}catch(cause:any){error.value=cause.message}}
+
+export async function activatePersonality(id:string){if(personalityBusy.value)return;personalityBusy.value=true;try{await api(`/api/pets/${id}/personalities/activate`,'POST',{version:personalityInfo.value.version});petId.value=id;await loadPet();notice.value='已切换人格；各自资料独立保存'}catch(cause:any){error.value=cause.message}finally{personalityBusy.value=false}}
