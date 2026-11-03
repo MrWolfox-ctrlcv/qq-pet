@@ -22,7 +22,7 @@ test('native reply placeholder resolves by exact sequence, conversation and orig
 });
 test('lecture request, ability question and bare self mention preserve the recent own image',()=>{
   const image=event('board','42',1,'',true);
-  for(const text of ['讲解一下','这个图能看了么',' ']){
+  for(const text of ['讲解一下','这个图能看了么','看看','看一下',' ']){
     const q=event('ask','42',2,text);q.segments=[{type:'at',qq:'999'},{type:'text',text}];
     assert.equal(selectRecentImageReference(q,[image],'999').event?.sourceId,'board');
   }

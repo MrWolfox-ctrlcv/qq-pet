@@ -3,7 +3,7 @@ import type {NormalizedEvent} from './events.ts';
 
 export function imageReadIntent(text:string){
   const t=text.trim();
-  return /^(?:请|帮我|给我)?(?:讲解|讲讲|解释|描述|分析)(?:一下|下|这个|这张|这幅)?[?？。！!\s]*$/.test(t)||/(?:描述|识别|分析|读出|读一下|讲解|讲讲|解释|看看|看一下|看下|看不清|看不到|能看|看清|写了什么|是什么|在哪|哪里|怎么读|什么内容)/.test(t)&&/(?:图|照片|截图|画面|经纬|坐标|板书|黑板|这张|这幅|这是什么)/.test(t);
+  return /^(?:请|帮我|给我)?(?:再)?(?:看看|看一下|看下|瞅瞅|瞅一眼|讲解|讲讲|解释|描述|分析)(?:一下|下|这个|这张|这幅)?[?？。！!\s]*$/.test(t)||/(?:描述|识别|分析|读出|读一下|讲解|讲讲|解释|看看|看一下|看下|看不清|看不到|能看|看清|写了什么|是什么|在哪|哪里|怎么读|什么内容)/.test(t)&&/(?:图|照片|截图|画面|经纬|坐标|板书|黑板|这张|这幅|这是什么)/.test(t);
 }
 export function selectRecentImageReference(trigger:NormalizedEvent,history:readonly NormalizedEvent[],selfId?:string){
   if(trigger.segments.some(s=>s.type==='image'))return {state:'not-needed',event:undefined};

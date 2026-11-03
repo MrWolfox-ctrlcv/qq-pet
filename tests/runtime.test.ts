@@ -25,16 +25,17 @@ async function fixture(t:any,opts:{accountId?:string;connectedAccountId?:string;
   return {dir,store,server,clients,sent,actions,config,models,runtime,runtimes,addRuntime:(r:Runtime)=>runtimes.push(r),emit};
 }
 
-test('group stream retains image author and sequence snapshot; duplicate delivery sends once and old media is not fetched',async t=>{
+test('group stream attaches window images with original authors, excludes future events and sends duplicate delivery once',async t=>{
   const entered=gate(),resume=gate();let block=true;
   const f=await fixture(t,{modelHandler:async messages=>{const current=JSON.parse(String(messages[1]?.content??'{}'));if(current.currentSpeaker?.id==='42'&&block){entered.resolve();await resume.promise;block=false}return '收到'} });
+  const loaded:string[]=[];(f.runtime as any).media.incomingImageInput=async(segment:any)=>{loaded.push(segment.url);return {width:100,height:80,hash:'synthetic',content:[{type:'image_url',image_url:{url:'https://example.invalid/a.png'}}]}};
   f.emit({message_id:'A-image',group_id:7,user_id:11,sender:{nickname:'A'},message:[{type:'image',data:{url:'https://a.qpic.cn/old.jpg'} }]});
   f.emit({message_id:'B-text',group_id:7,user_id:22,sender:{nickname:'B'},message:[{type:'text',data:{text:'unrelated'} }]});
   await until(()=>f.store.listMessages('pet',{chatId:'group:7',limit:10}).length===2);
   const c={message_id:'C-trigger',group_id:7,user_id:42,sender:{nickname:'Owner'},message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:' hi'}}]};f.emit(c);
   await entered.promise;f.emit(c);f.emit({message_id:'D-later',group_id:7,user_id:33,message:[{type:'text',data:{text:'later'} }]});resume.resolve();
   await until(()=>f.store.listTraces('pet').some(x=>x.triggerId==='D-later'&&x.state==='silent'));
-  assert.equal(f.models.calls(),1);assert.equal(f.sent.length,1);assert.equal(f.actions.filter(a=>a.action==='get_image').length,0);
+  assert.equal(f.models.calls(),1);assert.equal(f.sent.length,1);assert.deepEqual(loaded,['https://a.qpic.cn/old.jpg']);
   const captured=f.models.captured[0].map(m=>typeof m.content==='string'?m.content:JSON.stringify(m.content));const a=captured.find(x=>x.includes('A-image'))!,cMsg=captured.find(x=>x.includes('C-trigger'))!;
   assert.match(a,/"senderId":"11"/);assert.match(a,/"relation":"history"/);assert.match(cMsg,/"senderId":"42"/);assert.match(cMsg,/"relation":"current"/);assert.doesNotMatch(cMsg,/old\.jpg/);assert.doesNotMatch(captured.join('\n'),/D-later/);
   const send=f.sent[0];assert.equal(send.message_type,'group');assert.equal(send.group_id,'7');
@@ -203,8 +204,29 @@ test('separate image then describe request reads that actual image with original
   const quoted=f.store.listTraces('pet').find(t=>t.triggerId==='quote-visual-answer');const sources=quoted.messages.map((m:any)=>{try{return JSON.parse(m.content)}catch{return {}}}).filter((m:any)=>m.delivery==='native-image-input');assert.equal(sources[0].sourceMessageId,'own-photo');assert.equal(sources[0].originalSenderId,'42');
 });
 
-test('image question with multiple other authors requests clarification without downloading an arbitrary image',async t=>{
-  const f=await fixture(t);for(const uid of [11,12]){f.emit({message_id:'photo-'+uid,group_id:7,user_id:uid,message:[{type:'image',data:{file:'native-image:'+uid}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='photo-'+uid));}
-  f.emit({message_id:'ambiguous-image',group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:'描述图片'}}]});await until(()=>f.sent.length===1);
-  const input=f.models.captured.flat().map((m:any)=>String(m.content)).join('\n');assert.match(input,/image-reference-unresolved/);assert.match(input,/ambiguous/);assert.equal(f.actions.filter(a=>a.action==='get_image').length,0);
+test('multiple authors images are provided as separate visual context without selecting an arbitrary speaker',async t=>{
+  const f=await fixture(t);const loaded:string[]=[];
+  (f.runtime as any).media.incomingImageInput=async(segment:any)=>{loaded.push(segment.file);return {width:100,height:80,hash:'synthetic',content:[{type:'image_url',image_url:{url:'https://example.invalid/a.png'}}]}};
+  for(const uid of [11,12]){f.emit({message_id:'photo-'+uid,group_id:7,user_id:uid,message:[{type:'image',data:{file:'native-image:'+uid}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='photo-'+uid));}
+  f.emit({message_id:'ambiguous-image',group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:'何意味'}}]});await until(()=>f.sent.length===1);
+  const trace=f.store.listTraces('pet').find(t=>t.triggerId==='ambiguous-image')!;
+  const sources=trace.messages.flatMap((m:any)=>{try{const value=JSON.parse(m.content);return value.delivery==='native-image-input'?[value]:[]}catch{return []}});
+  assert.deepEqual(sources.map((s:any)=>s.originalSenderId).sort(),['11','12']);assert.equal(loaded.length,2);
+  assert.ok(trace.messages.some((m:any)=>typeof m.content==='string'&&m.content.includes('多图仍无法确定所指时询问')));
+});
+
+test('bare look request uses the fresh third-party picture instead of the speakers stale topic images',async t=>{
+  const f=await fixture(t);const loaded:string[]=[];
+  (f.runtime as any).media.incomingImageInput=async(segment:any)=>{loaded.push(segment.file);return {width:100,height:80,hash:'synthetic',content:[{type:'image_url',image_url:{url:'https://example.invalid/synthetic.png'}}]}};
+  const oldTime=Math.floor(Date.now()/1000)-1920;
+  for(const id of ['old-a','old-b']){f.emit({message_id:id,group_id:7,user_id:42,time:oldTime,message:[{type:'image',data:{file:'native-image:'+id}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId===id));}
+  loaded.length=0;const before=f.sent.length;
+  f.emit({message_id:'fresh-third-party',group_id:7,user_id:11,message:[{type:'image',data:{file:'native-image:fresh'}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='fresh-third-party'));
+  f.emit({message_id:'look-now',group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:' 何意味'}}]});await until(()=>f.sent.length===before+1);
+  assert.deepEqual(loaded,['native-image:fresh']);
+  const trace=f.store.listTraces('pet').find(t=>t.triggerId==='look-now')!;
+  const visual=trace.messages.filter((m:any)=>m.contextMeta?.kind==='media').map((m:any)=>m.contextMeta.id);
+  assert.deepEqual(visual,['fresh-third-party']);
+  const oldTopic=f.store.db.prepare('SELECT topic_id FROM context_topic_messages WHERE message_id=?').get('old-b') as any;
+  assert.equal(f.store.db.prepare('SELECT 1 FROM context_topic_images WHERE topic_id=? AND source_id=?').get(oldTopic.topic_id,'fresh-third-party'),undefined);
 });
