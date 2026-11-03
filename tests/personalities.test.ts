@@ -14,9 +14,10 @@ async function fixture(t:any,handler?:(pet:string)=>Promise<string>){
 test('same QQ personalities reuse one connection and isolate memories, galleries, stickers, profiles and replayed messages',async t=>{
  const f=await fixture(t);f.store.createMemory('a',{text:'白昼独有的记忆',personId:'42',scope:'private:42',sourceMessageIds:[]});f.store.createPerson('a',{id:'42',displayName:'Owner',fields:{affinity:80}});
  const png=await sharp({create:{width:2,height:2,channels:3,background:'blue'}}).png().toBuffer();for(const kind of ['gallery','sticker']){const asset=await f.store.importAsset('a',{bytes:png,kind,scope:'private'});assert.throws(()=>f.store.getAsset('b',asset.id));}
- f.emit('first','白昼独有的记忆');await until(()=>f.sent.length===1);const result=await f.runtime.switchPersonality('b');assert.equal(result.activePetId,'b');assert.equal(f.connections(),1);assert.equal(f.runtime.status('a').worker.state,'inactive-personality');
- f.emit('first','白昼独有的记忆');f.emit('second','你好');await until(()=>f.sent.length===2);assert.deepEqual(f.calls,['a','b']);assert.equal(f.store.listMessages('b',{chatId:'private:42'}).some(r=>r.id==='first'),false);
+ f.emit('first','第一人格的公开发言');await until(()=>f.sent.length===1);const result=await f.runtime.switchPersonality('b');assert.equal(result.activePetId,'b');assert.equal(f.connections(),1);assert.equal(f.runtime.status('a').worker.state,'inactive-personality');
+ f.emit('first','第一人格的公开发言');f.emit('second','你好');await until(()=>f.sent.length===2);assert.deepEqual(f.calls,['a','b']);assert.equal(f.store.listMessages('b',{chatId:'private:42'}).some(r=>r.id==='first'),false);
  assert.equal(f.store.listMemories('b').length,0);assert.equal(f.store.listAssets('b').length,0);assert.equal(f.store.listPeople('b')[0].fields.affinity,10);assert.doesNotMatch(JSON.stringify(f.inputs[1]),/白昼独有的记忆/);
+ const previous=f.inputs[1].find((m:any)=>{try{return JSON.parse(m.content).messageId==='out-1'}catch{return false}});assert.ok(previous);assert.equal(previous.role,'assistant');const record=JSON.parse(previous.content);assert.equal(record.relation,'history');assert.equal(record.personality,undefined);assert.equal(record.sharedConversation,undefined);assert.equal(record.senderName,undefined);assert.equal(record.segments[0].text,'a reply');assert.doesNotMatch(JSON.stringify(f.inputs[1].map(({role,content}:any)=>({role,content}))),/白昼/);
  f.emit('forbidden','#人格 白昼','77');await until(()=>f.store.listTraces('b').some(r=>r.triggerId==='forbidden'));assert.equal(f.runtime.personalities.active('b'),'b');assert.equal(f.sent.length,2);
  f.emit('switch-back','#人格 白昼');await until(()=>f.sent.length===3);assert.equal(f.runtime.personalities.active('b'),'a');assert.equal(f.connections(),1);assert.equal(f.store.listMemories('a').length,1);assert.equal(f.calls.length,2);
 });
@@ -24,4 +25,15 @@ test('switching cancels the old personality reply and pending memory tool withou
  let release!:()=>void;const blocked=new Promise<void>(r=>release=r);const f=await fixture(t,async pet=>{if(pet==='a'){await blocked;return '[[MEMORY: {"op":"add","text":"stale mutation","sourceIds":["blocked"]}]]'}return 'new reply'});
  f.emit('blocked','你好');await until(()=>f.calls.length===1);await f.runtime.switchPersonality('b');release();await until(()=>f.runtime.status('a').queue.pending===0);f.emit('new','你好');await until(()=>f.sent.length===1);
  assert.equal(f.store.listMemories('a').length,0);assert.equal(f.store.listMemories('b').length,0);assert.match(JSON.stringify(f.sent[0]),/new reply/);assert.equal(f.connections(),1);
+});
+
+test('visible previous conversation excludes other chats, other accounts and later arrivals without changing prompts',async t=>{
+ const f=await fixture(t),before=JSON.stringify(f.store.listPets().map(p=>p.prompts));
+ f.store.putMessage('a',{id:'previous',chatId:'group:1',senderId:'999',senderName:'白昼',direction:'out',segments:[{type:'text',text:'前面已经说过的一句话'}]});
+ f.store.putMessage('a',{id:'other-chat',chatId:'group:2',senderId:'999',direction:'out',segments:[{type:'text',text:'另一个群的消息'}]});
+ f.store.createPet({id:'c',name:'第三账号',accountId:'888'});f.store.putMessage('c',{id:'other-account',chatId:'group:1',senderId:'888',direction:'out',segments:[{type:'text',text:'不同账号的消息'}]});
+ const row=f.store.putMessage('b',{id:'snapshot',chatId:'group:1',senderId:'42',segments:[{type:'text',text:'接着聊'}]});
+ f.store.putMessage('a',{id:'later',chatId:'group:1',senderId:'999',direction:'out',segments:[{type:'text',text:'晚到的消息'}]});
+ const selected=f.runtime.personalities.conversation('b','group:1',row.id,100);assert.deepEqual(selected.map(r=>r.id),['previous']);
+ assert.equal(JSON.stringify(f.store.listPets().filter(p=>p.id!=='c').map(p=>p.prompts)),before);
 });

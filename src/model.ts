@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {ContextLimitError,protectionBudget} from './token-budget.ts';
 import type {ModelConnection} from './private-config.ts';
 
-export type ModelMessage={role:'system'|'user'|'assistant';content:unknown;contextMeta?:{kind:string;id?:string;sequence?:number;topicId?:string;protected?:boolean}};
+export type ModelMessage={role:'system'|'user'|'assistant';content:unknown;contextMeta?:{kind:string;id?:string;sequence?:number;topicId?:string;protected?:boolean;originPetId?:string;originPersonaName?:string;sharedConversation?:boolean}};
 export type Usage={calls:number;promptTokens:number|null;completionTokens:number|null;totalTokens?:number|null;cachedTokens:number|null;unreportedCalls?:number};
 export type CallContext={chatId:string;topicId?:string;triggerId?:string;snapshotId?:string};
 const reported=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0?v:null;

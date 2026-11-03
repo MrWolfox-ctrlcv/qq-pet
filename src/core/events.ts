@@ -6,6 +6,7 @@ export interface NormalizedEvent {
   id: string; sourceId: string; accountId?: string; chatId: string; chatType: 'private' | 'group' | 'unknown';
   authorId: string; authorName?: string; selfId?: string; time: number; sequence: number; messageType: string;
   text: string; segments: Segment[]; replyTo?: string; raw?: unknown;
+  originPetId?:string; originPersonaName?:string; sharedConversation?:boolean; conversationOrder?:number;
 }
 export function stableEventId(chatId: string, sourceId: string): string {
   return createHash('sha256').update(`${chatId}\0${sourceId}`).digest('hex');

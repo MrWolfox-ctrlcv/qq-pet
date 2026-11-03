@@ -131,10 +131,13 @@ export class Runtime {
   private isCurrentRunner(petId:string,runner:Runner){return !this.isStopped&&this.runners.get(petId)===runner&&this.generations.get(petId)===runner.generation&&this.personalities.isActive(petId);}
   private toEvent(message:Row):NormalizedEvent{
     const parsed=Date.parse(message.sentAt);const received=Date.parse(message.receivedAt);const time=Number.isFinite(parsed)?parsed:Number.isFinite(received)?received:Date.now();
-    return {id:message.id,sourceId:message.id,accountId:message.petId,chatId:message.chatId,chatType:message.chatId.startsWith('group:')?'group':'private',authorId:message.senderId,authorName:message.senderName,time,sequence:message.sequence,messageType:message.direction,text:message.segments.filter((s:Row)=>s.type==='text').map((s:Row)=>s.text??s.data?.text??'').join(''),segments:message.segments,replyTo:message.replyTo||undefined};
+    return {id:message.id,sourceId:message.id,accountId:message.petId,chatId:message.chatId,chatType:message.chatId.startsWith('group:')?'group':'private',authorId:message.senderId,authorName:message.senderName,time,sequence:message.sequence,messageType:message.direction,originPetId:message.originPetId||message.petId,originPersonaName:message.originPersonaName,sharedConversation:message.sharedConversation,conversationOrder:message.conversationOrder,text:message.segments.filter((s:Row)=>s.type==='text').map((s:Row)=>s.text??s.data?.text??'').join(''),segments:message.segments,replyTo:message.replyTo||undefined};
+  }
+  private conversationEvent(row:Row,triggerSequence:number){
+    return this.toEvent(row.sharedConversation?{...row,sequence:Math.min(triggerSequence-1,0),segments:row.segments.map((s:Row)=>s.type==='text'?{type:'text',text:s.text??s.data?.text??''}:s.type==='at'?{type:'at',qq:s.qq??s.data?.qq}:{type:s.type})}:row);
   }
   private compactEvent(event:NormalizedEvent,relation:string,maxChars=CONTEXT_MESSAGE_CHAR_LIMIT){
-    let textLimit=300,segmentLimit=Math.min(event.segments.length,8);const make=()=>JSON.stringify({messageId:clip(event.sourceId,120),senderId:clip(event.authorId,120),senderName:clip(event.authorName,100),sentAt:new Date(event.time).toISOString(),relation,segments:event.segments.slice(0,segmentLimit).map((raw:Row)=>{
+    let textLimit=300,segmentLimit=Math.min(event.segments.length,8);const make=()=>JSON.stringify({messageId:clip(event.sourceId,120),senderId:clip(event.authorId,120),senderName:event.sharedConversation&&event.messageType==='out'?undefined:clip(event.authorName,100),sentAt:new Date(event.time).toISOString(),relation,segments:event.segments.slice(0,segmentLimit).map((raw:Row)=>{
       if(raw.type==='text')return {type:'text',text:clip(raw.text??raw.data?.text??'',textLimit)};
       if(raw.type==='at')return {type:'at',qq:clip(raw.qq??raw.data?.qq,50)};
       if(raw.type==='reply')return {type:'reply',id:clip(raw.id??raw.data?.id,120)};
@@ -162,9 +165,14 @@ export class Runtime {
     const plan=await this.conversation.plan(petId,trigger,history,dry);
     const context=await buildContext(trigger,plan.messages,{fetchMessage:async(chatId,id)=>{
       const raw=this.store.db.prepare('SELECT * FROM messages WHERE pet_id=? AND chat_id=? AND id=? AND sequence<=?').get(petId,chatId,id,trigger.sequence) as Row|undefined;
-      if(!raw)return undefined;
+      if(!raw){const shared=this.personalities.conversation(petId,chatId,trigger.sourceId,1,id)[0];return shared?this.conversationEvent(shared,trigger.sequence):undefined;}
       return contextEvent(raw);
     }},Math.max(plan.settings.window,plan.messages.length));
+    const sharedRows=this.personalities.conversation(petId,trigger.chatId,trigger.sourceId,plan.settings.window-1);
+    const sharedEvents=sharedRows.filter(row=>row.sharedConversation).map(row=>this.conversationEvent(row,trigger.sequence));
+    const positions=new Map(sharedRows.map(row=>[row.id,row.conversationOrder]));
+    const merged=new Map([...context.messages,...sharedEvents].map(event=>[event.sourceId,event]));
+    context.messages=[...merged.values()].sort((a,b)=>a.time-b.time||(positions.get(a.sourceId)??a.sequence)-(positions.get(b.sourceId)??b.sequence));
     const replyImage=context.reply?.event.segments.some(s=>s.type==='image');
     const linked=context.reply?this.store.db.prepare('SELECT source_message_id FROM message_media_links WHERE pet_id=? AND chat_id=? AND message_id=?').all(petId,trigger.chatId,context.reply.event.sourceId) as Row[]:[];
     const linkedImage=linked.map(row=>{const raw=this.store.db.prepare('SELECT * FROM messages WHERE pet_id=? AND chat_id=? AND id=? AND sequence<=?').get(petId,trigger.chatId,row.source_message_id,trigger.sequence);return raw?contextEvent(raw):undefined;}).find(e=>e?.segments.some(s=>s.type==='image'));
@@ -189,15 +197,15 @@ export class Runtime {
       const relation=event.sourceId===trigger.sourceId?'current':'history';
       // Full text is retained. Scope, source IDs and token protection replace
       // the old per-message character truncation.
-      const content=JSON.stringify({messageId:event.sourceId,senderId:event.authorId,senderName:event.authorName,sentAt:new Date(event.time).toISOString(),relation,segments:event.segments.map((raw:Row)=>raw.type==='text'?{type:'text',text:raw.text??raw.data?.text??''}:raw.type==='at'?{type:'at',qq:raw.qq??raw.data?.qq}:raw.type==='reply'?{type:'reply',id:raw.id??raw.data?.id}:{type:raw.type,assetId:raw.assetId??raw.data?.assetId,catalogKey:raw.catalogKey})});
-      messages.push({role:event.authorId===pet.accountId?'assistant':'user',content,contextMeta:{kind:relation,id:event.sourceId,sequence:event.sequence,topicId:plan.topicMessageIds.includes(event.sourceId)?plan.topic?.id:undefined,protected:relation==='current'||event.sourceId===trigger.replyTo}});
+      const content=JSON.stringify({messageId:event.sourceId,senderId:event.authorId,senderName:event.sharedConversation&&event.authorId===pet.accountId?undefined:event.authorName,sentAt:new Date(event.time).toISOString(),relation,segments:event.segments.map((raw:Row)=>raw.type==='text'?{type:'text',text:raw.text??raw.data?.text??''}:raw.type==='at'?{type:'at',qq:raw.qq??raw.data?.qq}:raw.type==='reply'?{type:'reply',id:raw.id??raw.data?.id}:{type:raw.type,assetId:raw.assetId??raw.data?.assetId,catalogKey:raw.catalogKey})});
+      messages.push({role:event.authorId===pet.accountId?'assistant':'user',content,contextMeta:{kind:relation,id:event.sourceId,sequence:event.sequence,originPetId:event.originPetId,originPersonaName:event.originPersonaName,sharedConversation:event.sharedConversation,topicId:plan.topicMessageIds.includes(event.sourceId)?plan.topic?.id:undefined,protected:relation==='current'||event.sourceId===trigger.replyTo}});
       for(const segment of event.segments as Row[])if(['image','audio','video'].includes(segment.type))mediaSources.push({messageId:event.sourceId,senderId:event.authorId,senderName:event.authorName,sentAt:new Date(event.time).toISOString(),relation,type:segment.type,assetId:segment.assetId||null});
     }
     const explicitReplyIncluded=!!context.reply;
     if(context.reply&&!selected.some(e=>e.sourceId===context.reply!.event.sourceId))messages.push({role:'user',content:this.compactEvent(context.reply.event,'explicit-reply',12000).content,contextMeta:{kind:'reply',id:context.reply.event.sourceId,sequence:context.reply.event.sequence,protected:true}});
     const includedReplyHasMedia=context.reply?.event.segments.some((s:Row)=>s.type==='image');
     const usedChars=messages.filter(m=>m.contextMeta?.kind==='current'||m.contextMeta?.kind==='history').reduce((n,m)=>n+String(m.content).length,0);
-    const budget={windowMessages:plan.settings.window,topicId:plan.topic?.id||null,topicTitle:plan.topic?.title||null,summaryVersion:plan.summaryVersion,recentContextCharLimit:null,recentContextChars:usedChars,mediaReserveChars:recentImage.event||includedReplyHasMedia?1800:0,truncatedMessageIds:[] as string[],omittedMessageIds:omitted,omittedMediaIds:[] as string[],explicitReplyIncluded,memoryFactCharLimit:MEMORY_FACT_CHAR_LIMIT,clippedMemoryIds:memories.filter(m=>String(m.text||'').length>MEMORY_FACT_CHAR_LIMIT).map(m=>m.id),tokenLimits:plan.settings};
+    const budget={windowMessages:plan.settings.window,sharedConversationMessageIds:sharedEvents.map(e=>e.sourceId),topicId:plan.topic?.id||null,topicTitle:plan.topic?.title||null,summaryVersion:plan.summaryVersion,recentContextCharLimit:null,recentContextChars:usedChars,mediaReserveChars:recentImage.event||includedReplyHasMedia?1800:0,truncatedMessageIds:[] as string[],omittedMessageIds:omitted,omittedMediaIds:[] as string[],explicitReplyIncluded,memoryFactCharLimit:MEMORY_FACT_CHAR_LIMIT,clippedMemoryIds:memories.filter(m=>String(m.text||'').length>MEMORY_FACT_CHAR_LIMIT).map(m=>m.id),tokenLimits:plan.settings};
     if(recentImage.event){mediaSources.push({messageId:recentImage.event.sourceId,senderId:recentImage.event.authorId,sentAt:new Date(recentImage.event.time).toISOString(),relation:'recent-image-reference',type:'image'});}
     messages.push({role:'user',content:JSON.stringify({relation:'image-context',selectedSourceIds:[...new Set([...(replyImage&&context.reply?[context.reply.event.sourceId]:[]),...(linkedImage?[linkedImage.sourceId]:[]),...topicImages.map(e=>e.sourceId)])],rule:'图片按上下文自动提供，无需特定看图口令。根据当前提问与对话判断所指，原作者以图片来源元数据为准；多图仍无法确定所指时询问。未附字节的历史图片标记不代表已看见，可用READ读取明确的原消息。'})});
     return {messages,mediaSources,memories,budget,promptVersion:pet.version,context,recentImage,topicImages};
@@ -282,7 +290,7 @@ export class Runtime {
     const visualSourceIds=new Set<string>();
     // Media descriptions remain tied to their source event, including explicit historical replies.
     const mediaEvents=[...new Map([trigger,...(assembled.budget.explicitReplyIncluded&&assembled.context.reply?[assembled.context.reply.event]:[]),...(assembled.recentImage.event?[assembled.recentImage.event]:[]),...assembled.topicImages].map(e=>[e.sourceId,e])).values()];
-    const mediaInputs=mediaEvents.flatMap(source=>(source.segments as Row[]).filter(segment=>['image','audio','record','video'].includes(segment.type)).map(segment=>({source,segment})))
+    const mediaInputs=mediaEvents.filter(source=>!source.sharedConversation).flatMap(source=>(source.segments as Row[]).filter(segment=>['image','audio','record','video'].includes(segment.type)).map(segment=>({source,segment})))
     for(const [index,{source,segment}] of mediaInputs.entries()){
         if(index>=2){assembled.budget.omittedMediaIds.push(source.sourceId);continue;}
         if(!['image','audio','record','video'].includes(segment.type))continue;
@@ -362,15 +370,18 @@ export class Runtime {
           results.push({tool:'MEMORY',...this.memory.execute(petId,JSON.parse(request[2]),{chatId:trigger.chatId,uid:trigger.authorId,messageId:trigger.sourceId,sequence:trigger.sequence})});
         }else if(request[1]==='HISTORY'){
           if(!toolAllowed(this.store.getPet(petId),'history'))throw new Error('历史读取工具已关闭');
-          const query=request[2].trim();const rows=this.store.listMessages(petId,{chatId:trigger.chatId,limit:1000,beforeSequence:trigger.sequence+1}).map(r=>this.toEvent(r)).sort((a,b)=>a.time-b.time||a.sequence-b.sequence);
+          const query=request[2].trim();const accountRows=this.personalities.conversation(petId,trigger.chatId,trigger.sourceId,1000);
+          const rows=(accountRows.length?accountRows.map(row=>this.conversationEvent(row,trigger.sequence)):this.store.listMessages(petId,{chatId:trigger.chatId,limit:1000,beforeSequence:trigger.sequence+1}).map(r=>this.toEvent(r))).sort((a,b)=>a.time-b.time||(a.conversationOrder??a.sequence)-(b.conversationOrder??b.sequence));
           const selected=rows.filter(r=>!query||r.text.includes(query)||r.sourceId.includes(query)).slice(-8).map(r=>JSON.parse(this.compactEvent(r,'history-tool',520).content));
           let historyChars=0;const bounded:Row[]=[];for(const row of selected.reverse()){const value=JSON.stringify(row);if(historyChars+value.length>TOOL_HISTORY_CHAR_BUDGET)continue;historyChars+=value.length;bounded.push(row);}results.push({tool:'HISTORY',messages:bounded.reverse(),charLimit:TOOL_HISTORY_CHAR_BUDGET,chars:historyChars});
         }else if(request[1]==='READ'){
           if(!toolAllowed(this.store.getPet(petId),'history'))throw new Error('历史读取工具已关闭');
           const rawRow=this.store.db.prepare('SELECT * FROM messages WHERE pet_id=? AND chat_id=? AND id=? AND sequence<=?').get(petId,trigger.chatId,request[2].trim(),trigger.sequence) as Row|undefined;
-          const row=rawRow?{id:rawRow.id,senderId:rawRow.sender_id,sentAt:rawRow.sent_at,sequence:rawRow.sequence,segments:JSON.parse(rawRow.segments),event:contextEvent(rawRow)}:undefined;
+          const sharedRow=rawRow?undefined:this.personalities.conversation(petId,trigger.chatId,trigger.sourceId,1,request[2].trim())[0];
+          const sharedEvent=sharedRow?this.conversationEvent(sharedRow,trigger.sequence):undefined;
+          const row=rawRow?{id:rawRow.id,senderId:rawRow.sender_id,sentAt:rawRow.sent_at,sequence:rawRow.sequence,segments:JSON.parse(rawRow.segments),event:contextEvent(rawRow)}:sharedRow?{...sharedRow,event:sharedEvent!}:undefined;
           const observations:Row[]=[];
-          if(row)for(const segment of row.segments.filter((s:Row)=>s.type==='image').slice(0,2)){
+          if(row&&!row.event.sharedConversation)for(const segment of row.segments.filter((s:Row)=>s.type==='image').slice(0,2)){
             const image=await this.media.incomingImageInput(segment,runner.transport,/(文字|原图|细节|坐标|经纬|黑板|板书)/.test(trigger.text));
             const metadata={sourceMessageId:row.id,originalSenderId:row.senderId,sentAt:row.sentAt,delivery:'native-image-input',width:image.width,height:image.height};observations.push(metadata);
             imageInputs.push({role:'user',content:[{type:'text',text:JSON.stringify(metadata)},...image.content],contextMeta:{kind:'media',id:row.id,sequence:row.sequence,topicId,protected:true}});
