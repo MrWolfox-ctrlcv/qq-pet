@@ -197,6 +197,10 @@ test('separate image then describe request reads that actual image with original
   await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='describe-own'&&t.state==='sent'));
   const trace=f.store.listTraces('pet').find(t=>t.triggerId==='describe-own');const observation=trace.messages.map((m:any)=>{try{return JSON.parse(m.content)}catch{return {}}}).find((x:any)=>x.relation==='recent-image-reference-media');
   assert.equal(downloads,1);assert.equal(observation.sourceMessageId,'own-photo');assert.equal(observation.originalSenderId,'42');assert.equal(observation.delivery,'native-image-input');const input=f.models.captured.flat().find((m:any)=>Array.isArray(m.content)&&m.content.some((p:any)=>p.type==='image_url'));assert.ok(input);assert.equal(Buffer.from(input.content[0].image_url.url.split(',')[1],'base64').compare(bytes),0);assert.equal(f.models.kinds.includes('image-analysis'),false);assert.ok(trace.contextBudget.mediaReserveChars>0);
+  assert.equal(f.store.db.prepare('SELECT source_message_id FROM message_media_links WHERE pet_id=? AND chat_id=? AND message_id=?').get('pet','group:7','out-1')?.source_message_id,'own-photo');
+  f.emit({message_id:'other-photo',group_id:7,user_id:11,message:[{type:'image',data:{file:'native-image:other'}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='other-photo'));
+  f.emit({message_id:'quote-visual-answer',group_id:7,user_id:12,message:[{type:'reply',data:{id:'out-1'}},{type:'at',data:{qq:'999'}},{type:'text',data:{text:'再讲详细一点'}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='quote-visual-answer'&&t.state==='sent'));
+  const quoted=f.store.listTraces('pet').find(t=>t.triggerId==='quote-visual-answer');const sources=quoted.messages.map((m:any)=>{try{return JSON.parse(m.content)}catch{return {}}}).filter((m:any)=>m.delivery==='native-image-input');assert.equal(sources[0].sourceMessageId,'own-photo');assert.equal(sources[0].originalSenderId,'42');
 });
 
 test('image question with multiple other authors requests clarification without downloading an arbitrary image',async t=>{

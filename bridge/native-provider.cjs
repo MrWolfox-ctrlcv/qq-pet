@@ -5,6 +5,7 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const prepareImage = require('./native-image-send.cjs');
+delete require.cache[require.resolve('./native-reply.cjs')];
 const resolveReply = require('./native-reply.cjs');
 const MAX_REQUEST=72*1024*1024;
 
@@ -80,7 +81,7 @@ module.exports = function startProvider(configFile) {
     if (!raw?.msgId || !raw.peerUid || !raw.senderUin || ![1,2].includes(Number(raw.chatType))) return null;
     const author = String(raw.senderUin), nativeUid = String(raw.senderUid || '');
     if(nativeUid)uinToUid.set(author,nativeUid);
-    if(!references.has(String(raw.msgId))) {
+    if(!references.has(String(raw.msgId)) || /^[1-9]\d*$/.test(String(raw.msgSeq||''))&&String(references.get(String(raw.msgId))?.msgSeq)!==String(raw.msgSeq)) {
       remember(references,String(raw.msgId),{accountId,sourceId:String(raw.msgId),chatType:Number(raw.chatType),
         peerUid:String(raw.peerUid),msgSeq:String(raw.msgSeq||''),authorUin:author,authorUid:nativeUid},4096);
       saveReferences();
