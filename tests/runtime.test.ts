@@ -174,15 +174,15 @@ test('refreshing configuration while an old model call is pending prevents stale
   assert.equal(f.sent.length,0);assert.equal(f.store.db.prepare('SELECT state FROM deliveries WHERE source_id=?').get('stale-generation')?.state,'failed');
 });
 
-test('recent prompt context and tool history are bounded and clipping is recorded in traces',async t=>{
+test('dynamic window retains the full current message and bounds explicit history reads',async t=>{
   const f=await fixture(t,{modelHandler:messages=>messages.some((m:any)=>typeof m.content==='string'&&m.content.includes('"toolResults"'))?'done':'[[HISTORY: message-]]'});
   for(let i=0;i<20;i++)f.store.putMessage('pet',{id:`import-${i}`,chatId:'private:42',senderId:String(100+i),senderName:'Imported',sentAt:new Date(Date.UTC(2026,0,1,0,0,i)).toISOString(),segments:[{type:'text',text:`message-${i} `+'x'.repeat(1400)},{type:'image',url:'https://a.qpic.cn/image?token=do-not-include',metadata:{url:'https://a.qpic.cn/image?token=do-not-include'}}],direction:'in'});
   const longFact='fact '+('y'.repeat(800));f.store.createMemory('pet',{text:longFact,personId:'42',scope:'person',kind:'fact',sourceMessageIds:['private:42#import-1'],confidence:0.9});
   f.emit({message_id:'budget-trigger',user_id:42,sender:{nickname:'Owner'},message:[{type:'text',data:{text:'hello fact '+'z'.repeat(2600)}}]});await until(()=>f.sent.length===1);
-  const trace=f.store.listTraces('pet').find(x=>x.triggerId==='budget-trigger');assert.ok(trace?.contextBudget);assert.ok(trace.contextBudget.recentContextChars<=trace.contextBudget.recentContextCharLimit);assert.ok(trace.contextBudget.omittedMessageIds.length>0);assert.ok(trace.contextBudget.truncatedMessageIds.length>0);assert.ok(trace.contextBudget.clippedMemoryIds.includes(f.store.listMemories('pet')[0].id));
+  const trace=f.store.listTraces('pet').find(x=>x.triggerId==='budget-trigger');assert.ok(trace?.contextBudget);assert.equal(trace.contextBudget.windowMessages,10);assert.ok(trace.contextBudget.omittedMessageIds.length>0);assert.equal(trace.contextBudget.truncatedMessageIds.length,0);assert.ok(trace.contextBudget.clippedMemoryIds.includes(f.store.listMemories('pet')[0].id));
   const historyInputs=trace.messages.filter((m:any)=>{if(m.role!=='user'||typeof m.content!=='string')return false;try{return ['current','history'].includes(JSON.parse(m.content).relation)}catch{return false}});
-  assert.ok(historyInputs.length<12);assert.ok(historyInputs.every((m:any)=>m.content.length<=900));assert.doesNotMatch(JSON.stringify(trace.messages),/do-not-include/);
-  const current=historyInputs.find((m:any)=>m.content.includes('"relation":"current"'));assert.ok(current);assert.match(current.content,/"senderId":"42"/);
+  assert.ok(historyInputs.length<=10);assert.ok(historyInputs.some((m:any)=>m.content.length>900));assert.doesNotMatch(JSON.stringify(trace.messages),/do-not-include/);
+  const current=historyInputs.find((m:any)=>m.content.includes('"relation":"current"'));assert.ok(current);assert.match(current.content,/"senderId":"42"/);assert.ok(current.content.includes('z'.repeat(2600)));
   const historyTool=trace.messages.find((m:any)=>typeof m.content==='string'&&m.content.includes('"tool":"HISTORY"'));assert.ok(historyTool);const toolPayload=JSON.parse(historyTool.content).toolResults[0];assert.ok(toolPayload.chars<=2400);assert.ok(toolPayload.messages.length<=8);
 });
 

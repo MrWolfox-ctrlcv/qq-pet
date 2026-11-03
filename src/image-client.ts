@@ -4,7 +4,7 @@ import type {ModelConnection} from './private-config.ts';
 import type {ModelClient} from './model.ts';
 
 const MAX_BYTES=25*1024*1024;
-export async function generateAgnesImage(petId:string,config:ModelConnection,prompt:string,references:string[],models:ModelClient){
+export async function generateAgnesImage(petId:string,config:ModelConnection,prompt:string,references:string[],models:ModelClient,context:{chatId?:string}={}){
   if(!config.imageApiKey)throw new Error('请先配置 Agnes 生图密钥');
   const endpoint=new URL((config.imageBaseUrl||'https://apihub.agnes-ai.com').replace(/\/$/,'')+'/v1/images/generations');
   const started=Date.now(),signal=AbortSignal.timeout(180000);
@@ -29,6 +29,6 @@ export async function generateAgnesImage(petId:string,config:ModelConnection,pro
   }else throw new Error('Agnes 未返回生成图片');
   if(!bytes.length||bytes.length>MAX_BYTES)throw new Error('生图文件为空或过大');
   await sharp(bytes,{limitInputPixels:40_000_000}).stats();
-  models.record(petId,{kind:'drawing',model:config.imageModel||'agnes-image-2.0-flash',provider:'agnes',elapsedMs:Date.now()-started,promptTokens:0,completionTokens:0,cachedTokens:null,images:1,referenceImages:references.length});
+  models.record(petId,{...context,kind:'drawing',model:config.imageModel||'agnes-image-2.0-flash',provider:'agnes',elapsedMs:Date.now()-started,promptTokens:null,completionTokens:null,totalTokens:null,cachedTokens:null,usageSource:'not-reported',images:1,referenceImages:references.length});
   return bytes;
 }

@@ -77,14 +77,14 @@ export class MediaTools {
     const candidates=await this.#candidates(petId,ids,context,'gallery');const config=this.privateConfig.get(petId).model;
     const content:any[]=[{type:'text',text:`根据实际图片选择最符合检索要求和聊天内容的素材。随机、随便、浏览时从候选中选一张，不要求新图片。确实都不符合具体要求时ids可为空。返回 JSON {"description":"可见内容简述","ids":["候选ID"]}，ids只能从候选中选。检索要求：${context.query??''}\n聊天原文：${context.text??''}\n候选：${candidates.map(c=>`${c.id} | ${c.title} | ${c.tags.join(',')} | ${c.description}`).join('\n')}`}];
     for(const c of candidates){content.push({type:'text',text:`候选 ${c.id}：${c.title}`});for(const thumb of await this.#thumbnails(c))content.push({type:'image_url',image_url:{url:`data:image/jpeg;base64,${thumb.toString('base64')}`}})}
-    const result=await this.models.call(petId,config,[{role:'user',content}],{model:config.visionModel||'gemini-3.5-flash-lite',kind:'gallery-preview'});const value=previewJson(result.text,'gallery preview');
+    const result=await this.models.call(petId,config,[{role:'user',content}],{model:config.visionModel||'gemini-3.5-flash-lite',kind:'gallery-preview',context:{chatId:context.chatId}});const value=previewJson(result.text,'gallery preview');
     if(typeof value.description!=='string'||!Array.isArray(value.ids)||value.ids.some((id:any)=>typeof id!=='string'||!candidates.some(c=>c.id===id))||new Set(value.ids).size!==value.ids.length)throw new Error('Model returned invalid gallery candidate IDs');return {description:value.description,ids:value.ids as string[],usage:result.usage};
   }
   async preview(petId:string,ids:string[],context:PreviewContext){
     const candidates=await this.#candidates(petId,ids,context,'sticker');const config=this.privateConfig.get(petId).model;
     const content:any[]=[{type:'text',text:`选择最符合聊天语境的一张表情包。严格返回 JSON {"id":"候选ID"}，只能选择候选。聊天：${context.chatId}\n聊天原文：${context.text??context.query??''}\n候选：${candidates.map(c=>`${c.id} | ${c.title} | ${c.tags.join(',')} | ${c.description}`).join('\n')}`}];
     for(const c of candidates){const thumbs=await this.#thumbnails(c);content.push({type:'text',text:`候选 ${c.id}：${c.title}${thumbs.length>1?`（GIF抽取${thumbs.length}帧）`:''}`});for(const thumb of thumbs)content.push({type:'image_url',image_url:{url:`data:image/jpeg;base64,${thumb.toString('base64')}`}})}
-    const result=await this.models.call(petId,config,[{role:'user',content}],{model:config.visionModel||'gemini-3.5-flash-lite',kind:'sticker-preview'});
+    const result=await this.models.call(petId,config,[{role:'user',content}],{model:config.visionModel||'gemini-3.5-flash-lite',kind:'sticker-preview',context:{chatId:context.chatId}});
     const picked=previewJson(result.text,'sticker selection');
     if(typeof picked?.id!=='string'||!candidates.some(c=>c.id===picked.id))throw new Error('Model selected an ID outside the preview candidates');
     const chosen=candidates.find(c=>c.id===picked.id)!;const key=`${petId}:${context.chatId}`,history=this.#recent.get(key)??[];this.#recent.set(key,[chosen.id,...history.filter(x=>x!==chosen.id)].slice(0,20));
@@ -100,9 +100,9 @@ export class MediaTools {
     for(const ref of refs){const jpeg=await sharp(ref.bytes).rotate().resize({width:1536,height:1536,fit:'inside',withoutEnlargement:true}).jpeg({quality:88}).toBuffer();if(jpeg.length>8*1024*1024)throw new Error('Drawing reference exceeds the model payload limit');content.push({type:'text',text:`Reference ${ref.id}: ${ref.title}. ${ref.description}`},{type:'image_url',image_url:{url:`data:image/jpeg;base64,${jpeg.toString('base64')}`}})}
     let bytes:Buffer;
     if(model.imageProvider==='agnes'){
-      bytes=await generateAgnesImage(petId,model,prompt,content.filter(v=>v.type==='image_url').map(v=>v.image_url.url),this.models);
+      bytes=await generateAgnesImage(petId,model,prompt,content.filter(v=>v.type==='image_url').map(v=>v.image_url.url),this.models,{chatId});
     }else{
-    const result=await this.models.call(petId,model,[{role:'user',content}],{model:model.imageModel,kind:'drawing',maxTokens:256});
+    const result=await this.models.call(petId,model,[{role:'user',content}],{model:model.imageModel,kind:'drawing',maxTokens:256,context:{chatId}});
     const raw:any=result.raw;const msg=raw.choices?.[0]?.message;const candidates=[...(msg?.images??[]),...(Array.isArray(msg?.content)?msg.content:[])];
     const dataUrl=candidates.map((v:any)=>v?.image_url?.url??v?.url??v?.text).find((v:any)=>typeof v==='string'&&v.startsWith('data:image/'));
     const encoded=typeof dataUrl==='string'?dataUrl.slice(dataUrl.indexOf(',')+1):undefined;
@@ -166,7 +166,7 @@ export class MediaTools {
         const audio=path.join(work,'audio.wav');try{await this.#runMediaCommand(ffmpeg,['-hide_banner','-loglevel','error','-i',input,'-t','20','-vn','-ac','1','-ar','16000','-f','wav','-y',audio]);const data=readFileSync(audio);if(data.length<=12*1024*1024)content.push({type:'input_audio',input_audio:{data:data.toString('base64'),format:'wav'}})}catch{}
       }finally{rmSync(work,{recursive:true,force:true})}
     }
-    const result=await this.models.call(petId,model,[{role:'user',content}],{model:model.visionModel||'gemini-3.5-flash-lite',kind:`${kind}-analysis`});this.#saveAnalysis(petId,downloaded.hash,kind,result.text);return {description:result.text,cached:false,hash:downloaded.hash,provenance:{...source,mediaType:type}};
+    const result=await this.models.call(petId,model,[{role:'user',content}],{model:model.visionModel||'gemini-3.5-flash-lite',kind:`${kind}-analysis`,context:{chatId:source.chatId}});this.#saveAnalysis(petId,downloaded.hash,kind,result.text);return {description:result.text,cached:false,hash:downloaded.hash,provenance:{...source,mediaType:type}};
   }
   #providerFile(file:string,maxBytes:number){
     // Only a path returned by our authenticated provider action may enter this branch.

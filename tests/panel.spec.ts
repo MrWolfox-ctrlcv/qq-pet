@@ -149,3 +149,21 @@ test('管理流程真实保存并在窄屏无横向溢出', async ({ page }) => 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   expect(savedVersion).toBeGreaterThan(1)
 })
+
+
+test('上下文窗口真实保存且逐次用量面板可查看',async({page})=>{
+  await login(page)
+  await page.getByRole('button',{name:'设置与备份'}).click()
+  const settings=page.locator('.context-settings')
+  await expect(settings.getByLabel('基础消息条数')).toHaveValue('10')
+  await settings.getByLabel('基础消息条数').fill('12')
+  await settings.getByRole('button',{name:'保存上下文设置'}).click()
+  await expect(page.getByText('上下文设置已保存，下轮生效')).toBeVisible()
+  expect((await(await page.request.get(`/api/pets/${petId}`)).json()).data.settings.contextWindowMessages).toBe(12)
+  await page.reload()
+  await page.getByRole('button',{name:'设置与备份'}).click()
+  await expect(settings.getByLabel('基础消息条数')).toHaveValue('12')
+  await page.screenshot({path:'output/context-settings.png',fullPage:true})
+  await page.getByRole('button',{name:'聊天检查'}).click()
+  await expect(page.getByRole('heading',{name:'话题与真实用量'})).toBeVisible()
+})

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 
 type Pet = { id: string; name: string; accountId: string; prompts: Record<string, string>; settings: Record<string, any>; version: number; updatedAt: string }
 type Row = Record<string, any>
-export const csrf = ref(''), authenticated = ref(false), token = ref(''), pets = ref<Pet[]>([]), petId = ref(''), pet = ref<Pet | null>(null), page = ref('overview'), data = ref<Row[]>([]), error = ref(''), notice = ref(''), search = ref(''), categoryFilter = ref(''), scopeFilter = ref(''), selected = ref<Row | null>(null), form = ref<Row>({}), preview = ref(''), previewResult = ref<Row | null>(null), status = ref<Row | null>(null), backups = ref<Row[]>([]), connection = ref<Row>({ connection: {}, model: {} }), revisions = ref<Row[]>([]), traces = ref<Row[]>([]), modelTest = ref(''), summaries = ref<Row[]>([])
+export const csrf = ref(''), authenticated = ref(false), token = ref(''), pets = ref<Pet[]>([]), petId = ref(''), pet = ref<Pet | null>(null), page = ref('overview'), data = ref<Row[]>([]), error = ref(''), notice = ref(''), search = ref(''), categoryFilter = ref(''), scopeFilter = ref(''), selected = ref<Row | null>(null), form = ref<Row>({}), preview = ref(''), previewResult = ref<Row | null>(null), status = ref<Row | null>(null), backups = ref<Row[]>([]), connection = ref<Row>({ connection: {}, model: {} }), revisions = ref<Row[]>([]), traces = ref<Row[]>([]), modelTest = ref(''), summaries = ref<Row[]>([]), contextInfo = ref<Row>({})
 export const nav = [['overview', '运行总览', '◉'], ['prompt', 'Pet 与提示词', '✎'], ['gallery', '图库', '▧'], ['stickers', '表情包', '☻'], ['memories', '记忆', '◷'], ['people', '人物与画像', '♙'], ['chat', '聊天检查', '▤'], ['settings', '设置与备份', '⚙']]
 export const currentPet = computed(() => pets.value.find(item => item.id === petId.value) || null)
 
@@ -26,7 +26,7 @@ export async function loadPage() {
   error.value = ''
   try {
     if (page.value === 'overview') status.value = await api(`/api/pets/${petId.value}/status`)
-    else if (page.value === 'chat') { data.value = await api(`/api/pets/${petId.value}/messages?limit=100`); traces.value = await api(`/api/pets/${petId.value}/traces`); summaries.value = await api(`/api/pets/${petId.value}/summaries`) }
+    else if (page.value === 'chat') { data.value = await api(`/api/pets/${petId.value}/messages?limit=100`); traces.value = await api(`/api/pets/${petId.value}/traces`); summaries.value = await api(`/api/pets/${petId.value}/summaries`); contextInfo.value = await api(`/api/pets/${petId.value}/context`) }
     else if (collectionPath.value) data.value = await api(`/api/pets/${petId.value}/${collectionPath.value}`)
     else if (page.value === 'settings') { backups.value = await api('/api/backups'); connection.value = await api(`/api/pets/${petId.value}/connection`) }
     else if (page.value === 'prompt') revisions.value = await api(`/api/revisions?entityType=pet&entityId=${petId.value}&petId=${petId.value}`)
@@ -55,3 +55,6 @@ export async function backup() { try { await api('/api/backups', 'POST', {}); no
 export async function restoreRevision(revision: Row) { if (!pet.value) return; try { pet.value = await api(`/api/revisions/${revision.id}/restore`, 'POST', { petId: petId.value, entityType: 'pet', entityId: petId.value, version: pet.value.version }); notice.value = '提示词版本已恢复'; await loadPage() } catch (cause: any) { error.value = cause.message } }
 export async function saveConnection(payload: Row) { try { connection.value = await api(`/api/pets/${petId.value}/connection`, 'PATCH', payload); notice.value = '连接与模型设置已保存' } catch (cause: any) { error.value = cause.message } }
 export async function restore(backup: Row) { if (!confirm('确定恢复此备份？当前数据将被覆盖。')) return; try { await api(`/api/backups/${backup.id}/restore`, 'POST', { confirmation: 'RESTORE' }); notice.value = '恢复已完成' } catch (cause: any) { error.value = cause.message } }
+
+export async function saveContext(settings:Row){if(!pet.value)return;try{pet.value=await api(`/api/pets/${petId.value}`,'PATCH',{version:pet.value.version,settings});notice.value='上下文设置已保存，下轮生效'}catch(cause:any){error.value=cause.message}}
+export async function compactContext(topicId:string){try{const result=await api(`/api/pets/${petId.value}/context/compact`,'POST',{topicId});notice.value=result.applied?'较早内容已压缩，原文保留':result.failed?'压缩失败，原文保持可用':'暂未压缩：'+(result.skipped||'没有符合条件的旧内容');await loadPage()}catch(cause:any){error.value=cause.message}}
