@@ -73,6 +73,18 @@ test('generated image call requires explicit user drawing intent',async t=>{
   assert.equal(f.models.kinds.includes('drawing'),false);assert.equal(f.store.listAssets('pet',{kind:'gallery'}).length,0);assert.match(JSON.stringify(f.sent[0].message),/未明确要求新画/);
 });
 
+test('existing image request finds a literal subject, previews it and sends its catalog number without drawing',async t=>{
+  let assetId='',number=0;const f=await fixture(t,{modelHandler:messages=>{
+    if(Array.isArray(messages[0]?.content))return JSON.stringify({description:'一只白萝卜',ids:[assetId]});
+    const result=messages.find(m=>typeof m.content==='string'&&m.content.includes('"toolResults"'));
+    if(result){const data=JSON.parse(String(result.content)).toolResults[0];assert.equal(data.images[0].id,assetId);return `这张萝卜图！[[PIC: 图${number}]]`;}
+    return '[[GALLERY: 萝卜]]';
+  }});
+  const bytes=await sharp({create:{width:11,height:9,channels:3,background:'#eeeecc'}}).png().toBuffer();const asset=await f.store.importAsset('pet',{bytes,kind:'gallery',category:'drawing',title:'水彩插画，一只白萝卜',description:'一只带绿叶的白萝卜',scope:'public'});assetId=asset.id;number=asset.number;
+  f.emit({message_id:'send-radish',group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:'发对应的萝卜图'}}]});await until(()=>f.sent.length===1);
+  const image=f.sent[0].message.find((s:any)=>s.type==='image');assert.ok(image);assert.equal(image.assetId,assetId);assert.equal(Buffer.from(image.data.file.slice(9),'base64').compare(bytes),0);assert.equal(f.models.kinds.includes('drawing'),false);assert.equal(f.models.kinds.filter(k=>k==='gallery-preview').length,1);
+});
+
 test('closed tool interface hides instructions and blocks model-emitted tool markers',async t=>{
   const f=await fixture(t,{modelHandler:()=> '[[MEDIA: {"op":"add","kind":"sticker"}]] [[AT: 42]] [[PIC: forged]] 已收到'});
   const pet=f.store.getPet('pet');f.store.updatePet('pet',{settings:{toolsEnabled:false}},pet.version);
