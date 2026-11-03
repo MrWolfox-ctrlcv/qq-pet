@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import {petInteraction} from './core/interactions.ts';
 import {Personalities} from './personalities.ts';
 import {MemoryTools,memoryVisible,memoryGuidance} from './memory-tools.ts';
 import crypto from 'node:crypto';
@@ -197,7 +198,7 @@ export class Runtime {
       const relation=event.sourceId===trigger.sourceId?'current':'history';
       // Full text is retained. Scope, source IDs and token protection replace
       // the old per-message character truncation.
-      const content=JSON.stringify({messageId:event.sourceId,senderId:event.authorId,senderName:event.sharedConversation&&event.authorId===pet.accountId?undefined:event.authorName,sentAt:new Date(event.time).toISOString(),relation,segments:event.segments.map((raw:Row)=>raw.type==='text'?{type:'text',text:raw.text??raw.data?.text??''}:raw.type==='at'?{type:'at',qq:raw.qq??raw.data?.qq}:raw.type==='reply'?{type:'reply',id:raw.id??raw.data?.id}:{type:raw.type,assetId:raw.assetId??raw.data?.assetId,catalogKey:raw.catalogKey})});
+      const content=JSON.stringify({interaction:petInteraction(event,pet.accountId),messageId:event.sourceId,senderId:event.authorId,senderName:event.sharedConversation&&event.authorId===pet.accountId?undefined:event.authorName,sentAt:new Date(event.time).toISOString(),relation,segments:event.segments.map((raw:Row)=>raw.type==='text'?{type:'text',text:raw.text??raw.data?.text??''}:raw.type==='at'?{type:'at',qq:raw.qq??raw.data?.qq}:raw.type==='reply'?{type:'reply',id:raw.id??raw.data?.id}:{type:raw.type,assetId:raw.assetId??raw.data?.assetId,catalogKey:raw.catalogKey})});
       messages.push({role:event.authorId===pet.accountId?'assistant':'user',content,contextMeta:{kind:relation,id:event.sourceId,sequence:event.sequence,originPetId:event.originPetId,originPersonaName:event.originPersonaName,sharedConversation:event.sharedConversation,topicId:plan.topicMessageIds.includes(event.sourceId)?plan.topic?.id:undefined,protected:relation==='current'||event.sourceId===trigger.replyTo}});
       for(const segment of event.segments as Row[])if(['image','audio','video'].includes(segment.type))mediaSources.push({messageId:event.sourceId,senderId:event.authorId,senderName:event.authorName,sentAt:new Date(event.time).toISOString(),relation,type:segment.type,assetId:segment.assetId||null});
     }

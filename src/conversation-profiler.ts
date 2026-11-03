@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import {petInteraction} from './core/interactions.ts';
+import {contextEvent} from './conversation-context.ts';
 import {MemoryTools,memoryGuidance} from './memory-tools.ts';
 import {toolAllowed} from './tool-policy.ts';
 import {randomUUID} from 'node:crypto';
@@ -60,7 +62,7 @@ export class ConversationProfiler {
     const idle=Math.max(2,Math.min(120,Number(pet.settings.profileSummaryIdleMinutes)||10))*60000;
     if(!all.length||(!force&&all.length<threshold&&(all.length<4||Date.now()-Date.parse(all.at(-1)!.receivedAt)<idle)))return {skipped:'not-yet-due'};
     let rows=all.slice(0,40);
-    const selected=rows.map(m=>({id:m.id,qq:m.senderId,name:clip(m.senderName,50),time:m.sentAt,text:m.segments.filter((s:Row)=>s.type==='text').map((s:Row)=>s.text??s.data?.text??'').join(''),media:m.segments.filter((s:Row)=>s.type!=='text').map((s:Row)=>({type:s.type})),direction:m.direction}));
+    const selected=rows.map(m=>({id:m.id,qq:m.senderId,name:clip(m.senderName,50),time:m.sentAt,text:m.segments.filter((s:Row)=>s.type==='text').map((s:Row)=>s.text??s.data?.text??'').join(''),media:m.segments.filter((s:Row)=>s.type!=='text').map((s:Row)=>({type:s.type})),direction:m.direction,interaction:petInteraction(contextEvent(m),pet.accountId)}));
     while(selected.length>1&&Buffer.byteLength(JSON.stringify(selected))>16000)selected.pop();
     rows=rows.slice(0,selected.length);const toSequence=rows.at(-1)!.sequence;
     const speakers=[...new Set(selected.filter(m=>m.direction==='in'&&m.qq!==pet.accountId).map(m=>m.qq))].slice(0,12);

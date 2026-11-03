@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
+import {petInteraction} from './interactions.ts';
 import type { NormalizedEvent } from './events.ts';
-export type Decision = { reply: boolean; reason: 'addressed-to-self' | 'mentions-master' | 'remote-required' | 'cooldown' | 'not-addressed' };
+export type Decision = { reply: boolean; reason: 'pet-interaction' | 'addressed-to-self' | 'mentions-master' | 'remote-required' | 'cooldown' | 'not-addressed' };
 export interface RemoteDecision { shouldReply(event: NormalizedEvent): Promise<boolean> }
 export class ResponseDecider {
   #lastRemote = new Map<string, number>();
   readonly selfId:string; readonly masterIds:readonly string[]; readonly remote?:RemoteDecision; readonly intervalMs:number; readonly now:()=>number;
   constructor(selfId: string, masterIds: readonly string[], remote?: RemoteDecision, intervalMs = 15_000, now = () => Date.now()) { this.selfId=selfId;this.masterIds=masterIds;this.remote=remote;this.intervalMs=intervalMs;this.now=now; }
   async decide(e: NormalizedEvent): Promise<Decision> {
+    if(petInteraction(e,this.selfId))return {reply:true,reason:'pet-interaction'};
     const raw: any = e.raw; const mentions: string[] = (Array.isArray(raw?.message) ? raw.message : []).filter((s: any) => s.type === 'at').map((s: any) => String(s.data?.qq));
     if (mentions.includes(this.selfId)) return { reply: true, reason: 'addressed-to-self' };
     if (this.masterIds.some(id => mentions.includes(id))) return { reply: true, reason: 'mentions-master' };

@@ -230,3 +230,10 @@ test('bare look request uses the fresh third-party picture instead of the speake
   const oldTopic=f.store.db.prepare('SELECT topic_id FROM context_topic_messages WHERE message_id=?').get('old-b') as any;
   assert.equal(f.store.db.prepare('SELECT 1 FROM context_topic_images WHERE topic_id=? AND source_id=?').get(oldTopic.topic_id,'fresh-third-party'),undefined);
 });
+
+test('ampersand reaches the active pet as fictional interaction without at or automatic affinity changes',async t=>{
+ const f=await fixture(t,{modelHandler:messages=>{const current=messages.flatMap(m=>{try{const x=JSON.parse(m.content);return x.relation==='current'?[x]:[]}catch{return []}})[0];assert.equal(current.interaction.kind,'virtual-whip');assert.equal(current.interaction.fictional,true);assert.equal(current.interaction.actorId,'77');return '猫耳一抖，又不服气地瞪回来。'}});
+ f.emit({message_id:'whip',group_id:7,user_id:77,message:[{type:'text',data:{text:'&'}}]});await until(()=>f.sent.length===1);assert.deepEqual(f.models.kinds,['chat']);
+ assert.equal(f.store.listPeople('pet').find(p=>p.id==='77')!.fields.affinity,10);assert.equal(f.store.listMemories('pet').length,0);
+ f.emit({message_id:'ordinary-and',group_id:7,user_id:77,message:[{type:'text',data:{text:'https://example.invalid?a=1&b=2'}}]});await until(()=>f.store.listTraces('pet').some(t=>t.triggerId==='ordinary-and'));assert.equal(f.sent.length,1);
+});
