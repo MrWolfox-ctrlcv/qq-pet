@@ -49,10 +49,10 @@ test('private messages reply directly; paused and preview-only live flags archiv
 });
 
 test('wrong account never reaches model or send; explicit evidence is scoped and source-linked without changing locked profile fields',async t=>{
-  const entered=gate(),resume=gate();const f=await fixture(t,{modelHandler:async messages=>{const sys=String(messages[0]?.content??'');if(sys.includes('只提取当前说话人'))return JSON.stringify([{text:'喜欢喝茶',kind:'preference',confidence:0.95}]);entered.resolve();await resume.promise;return '记住了'} });
+  const entered=gate(),resume=gate();const f=await fixture(t,{modelHandler:async messages=>{const sys=String(messages[0]?.content??'');if(sys.includes('只提取当前说话人'))return JSON.stringify([{text:'喜欢喝茶',kind:'preference',confidence:0.95}]);if(messages.some(m=>String(m.content).includes('toolResults')))return '记住了';entered.resolve();await resume.promise;return '[[MEMORY: {"op":"add","text":"喜欢茶","personId":"42","kind":"preference","sourceIds":["evidence"]}]]'} });
   f.store.createPerson('pet',{id:'42',displayName:'Owner',aliases:[],fields:{relationship:'manual'},lockedFields:['relationship']});
   f.emit({message_id:'evidence',user_id:42,sender:{nickname:'Owner'},message:[{type:'text',data:{text:'我喜欢喝茶，请记住我喜欢茶'}}]});await entered.promise;resume.resolve();await until(()=>f.store.listMemories('pet').length===1);
-  const memory=f.store.listMemories('pet')[0];assert.deepEqual(memory.sourceMessageIds,['private:42#evidence']);assert.equal(memory.scope,'person');assert.equal(memory.personId,'42');assert.equal(f.store.listPeople('pet').find(p=>p.id==='42')?.fields.relationship,'manual');
+  const memory=f.store.listMemories('pet')[0];assert.deepEqual(memory.sourceMessageIds,['private:42#evidence']);assert.equal(memory.scope,'private:42');assert.equal(memory.personId,'42');assert.equal(f.store.listPeople('pet').find(p=>p.id==='42')?.fields.relationship,'manual');
   const mismatch=await fixture(t,{accountId:'999',connectedAccountId:'wrong',modelHandler:()=>{throw new Error('must not be called')}});
   const event=new EventSequencer().next({message_id:'wrong-self',user_id:42,time:1,message:'hi',self_id:'wrong'});
   await mismatch.runtime.accept('pet',event);await until(()=>mismatch.store.listTraces('pet').some(x=>x.triggerId==='wrong-self'&&x.state==='archived-only'));

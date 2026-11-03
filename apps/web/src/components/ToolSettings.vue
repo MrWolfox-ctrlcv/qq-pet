@@ -25,7 +25,7 @@ import {toolGroups,type ToolGroup} from '../../../../src/tool-policy.ts'
 const props=defineProps<{settings:Record<string,any>}>()
 const emit=defineEmits<{save:[settings:Record<string,any>]}>()
 const isEnabled=ref(false)
-const permissions=reactive<Record<ToolGroup,boolean>>({media:true,mediaManagement:true,history:true,mentions:true,drawing:true})
+const permissions=reactive<Record<ToolGroup,boolean>>({media:true,mediaManagement:true,history:true,mentions:true,drawing:true,memory:true})
 watch(()=>props.settings,value=>{
   isEnabled.value=value?.toolsEnabled===true
   for(const key of Object.keys(toolGroups) as ToolGroup[])permissions[key]=value?.toolPermissions?.[key]!==false
