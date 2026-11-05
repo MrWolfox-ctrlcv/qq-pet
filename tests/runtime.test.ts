@@ -10,6 +10,7 @@ import { PetStore } from '../src/store.ts';
 import { PrivateConfig } from '../src/private-config.ts';
 import { Runtime } from '../src/runtime.ts';
 import { EventSequencer } from '../src/core/events.ts';
+import {PetError} from '../src/errors.ts';
 
 const pause=(ms=10)=>new Promise(r=>setTimeout(r,ms));
 async function until(fn:()=>boolean,timeout=2500){const end=Date.now()+timeout;while(Date.now()<end){if(fn())return;await pause()}throw new Error('Timed out waiting for runtime state')}
@@ -79,12 +80,13 @@ for(const kind of ['sticker','gallery'] as const)test(`${kind}-only reply sends 
   assert.ok(f.models.kinds.includes(kind==='sticker'?'sticker-preview':'gallery-preview'));
 });
 
-test('fallback is sent only when no usable text, mention or media remains',async t=>{
+test('missing stickers and invalid mention-only replies report different causes',async t=>{
   let reply='[[STICKER: missing]]';const f=await fixture(t,{modelHandler:()=>reply});
   for(const [id,text] of [['missing-sticker','发张表情'],['invalid-mention','你好']]){
     if(id==='invalid-mention')reply='[[AT: 12345]]';
     f.emit({message_id:id,group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text}}]});await until(()=>f.sent.length===(id==='missing-sticker'?1:2));
-    assert.deepEqual(f.sent.at(-1).message,[{type:'text',data:{text:'暂时无法完成这项操作。'}}]);
+    assert.match(f.sent.at(-1).message[0].data.text,new RegExp(id==='missing-sticker'?'STICKER_NOT_FOUND':'MENTION_INVALID'));
+    const trace=f.store.listTraces('pet').find(x=>x.triggerId===id);assert.equal(trace.diagnostics[0].code,id==='missing-sticker'?'STICKER_NOT_FOUND':'MENTION_INVALID');
   }
 });
 
@@ -177,13 +179,21 @@ test('sent and possibly-sent deliveries are reconciled without another send',asy
   assert.equal(f.store.db.prepare('SELECT state FROM incoming_jobs WHERE source_id=?').get('may-have-sent')?.state,'done');
 });
 
-test('model failures are surfaced as failed jobs and never retried in a restart loop',async t=>{
-  const f=await fixture(t,{modelHandler:()=>{throw new Error('model unavailable')}});
+test('model failures send one diagnostic notice and are not retried',async t=>{
+  const f=await fixture(t,{modelHandler:()=>{throw new PetError('MODEL_RATE_LIMIT','模型服务请求过于频繁，请稍后再试。')}});
   f.emit({message_id:'model-failed',user_id:42,message:[{type:'text',data:{text:'hello'}}]});
-  await until(()=>f.store.db.prepare('SELECT state FROM incoming_jobs WHERE source_id=?').get('model-failed')?.state==='failed');
-  const job=f.store.db.prepare('SELECT last_error FROM incoming_jobs WHERE source_id=?').get('model-failed');assert.match(String(job?.last_error),/model unavailable/);assert.equal(f.sent.length,0);
-  await f.runtime.stop();const restarted=new Runtime(f.store,f.config,f.models as any);f.addRuntime(restarted);await restarted.refresh('pet');await until(()=>restarted.status('pet').account.state==='online');await pause(100);
-  assert.equal(f.models.calls(),1);assert.equal(f.sent.length,0);assert.equal(f.store.db.prepare('SELECT state FROM incoming_jobs WHERE source_id=?').get('model-failed')?.state,'failed');
+  await until(()=>f.store.db.prepare('SELECT state FROM incoming_jobs WHERE source_id=?').get('model-failed')?.state==='done');
+  assert.equal(f.sent.length,1);assert.match(f.sent[0].message[0].data.text,/MODEL_RATE_LIMIT/);
+  assert.equal(f.store.listTraces('pet').find(x=>x.triggerId==='model-failed').diagnostics[0].code,'MODEL_RATE_LIMIT');
+  f.emit({message_id:'model-failed',user_id:42,message:[{type:'text',data:{text:'hello'}}]});await pause(50);
+  assert.equal(f.models.calls(),1);assert.equal(f.sent.length,1);
+});
+
+test('empty model text and tool round exhaustion have distinct diagnostics',async t=>{
+  const f=await fixture(t,{modelHandler:()=>''});f.emit({message_id:'empty-model',user_id:42,message:'hello'});await until(()=>f.sent.length===1);
+  assert.match(f.sent[0].message[0].data.text,/MODEL_EMPTY/);
+  const g=await fixture(t,{modelHandler:()=> '[[HISTORY: hello]]'});g.emit({message_id:'tool-loop',user_id:42,message:'hello'});await until(()=>g.sent.length===1);
+  assert.equal(g.models.calls(),5);assert.match(g.sent[0].message[0].data.text,/TOOL_ROUND_LIMIT/);
 });
 
 test('refreshing configuration while an old model call is pending prevents stale runner sends',async t=>{
@@ -196,14 +206,25 @@ test('refreshing configuration while an old model call is pending prevents stale
 
 test('dynamic window retains the full current message and bounds explicit history reads',async t=>{
   const f=await fixture(t,{modelHandler:messages=>messages.some((m:any)=>typeof m.content==='string'&&m.content.includes('"toolResults"'))?'done':'[[HISTORY: message-]]'});
+  (f.runtime as any).media.incomingImageInput=async()=>{throw new Error('Synthetic history image is unavailable')};
   for(let i=0;i<20;i++)f.store.putMessage('pet',{id:`import-${i}`,chatId:'private:42',senderId:String(100+i),senderName:'Imported',sentAt:new Date(Date.UTC(2026,0,1,0,0,i)).toISOString(),segments:[{type:'text',text:`message-${i} `+'x'.repeat(1400)},{type:'image',url:'https://a.qpic.cn/image?token=do-not-include',metadata:{url:'https://a.qpic.cn/image?token=do-not-include'}}],direction:'in'});
   const longFact='fact '+('y'.repeat(800));f.store.createMemory('pet',{text:longFact,personId:'42',scope:'person',kind:'fact',sourceMessageIds:['private:42#import-1'],confidence:0.9});
-  f.emit({message_id:'budget-trigger',user_id:42,sender:{nickname:'Owner'},message:[{type:'text',data:{text:'hello fact '+'z'.repeat(2600)}}]});await until(()=>f.sent.length===1);
+  f.emit({message_id:'budget-trigger',user_id:42,sender:{nickname:'Owner'},message:[{type:'text',data:{text:'hello fact '+'z'.repeat(2600)}}]});await until(()=>f.store.listTraces('pet').some(x=>x.triggerId==='budget-trigger'&&x.state==='sent'));
   const trace=f.store.listTraces('pet').find(x=>x.triggerId==='budget-trigger');assert.ok(trace?.contextBudget);assert.equal(trace.contextBudget.windowMessages,10);assert.ok(trace.contextBudget.omittedMessageIds.length>0);assert.equal(trace.contextBudget.truncatedMessageIds.length,0);assert.ok(trace.contextBudget.clippedMemoryIds.includes(f.store.listMemories('pet')[0].id));
   const historyInputs=trace.messages.filter((m:any)=>{if(m.role!=='user'||typeof m.content!=='string')return false;try{return ['current','history'].includes(JSON.parse(m.content).relation)}catch{return false}});
   assert.ok(historyInputs.length<=10);assert.ok(historyInputs.some((m:any)=>m.content.length>900));assert.doesNotMatch(JSON.stringify(trace.messages),/do-not-include/);
   const current=historyInputs.find((m:any)=>m.content.includes('"relation":"current"'));assert.ok(current);assert.match(current.content,/"senderId":"42"/);assert.ok(current.content.includes('z'.repeat(2600)));
   const historyTool=trace.messages.find((m:any)=>typeof m.content==='string'&&m.content.includes('"tool":"HISTORY"'));assert.ok(historyTool);const toolPayload=JSON.parse(historyTool.content).toolResults[0];assert.ok(toolPayload.chars<=2400);assert.ok(toolPayload.messages.length<=8);
+});
+
+test('failed and uncertain QQ sends record distinct diagnostics without a second send attempt',async t=>{
+  for(const status of ['failed','uncertain'] as const){
+    const f=await fixture(t);let attempts=0;
+    (f.runtime as any).runners.get('pet').transport.sendMessage=async()=>{attempts++;return {ok:false,status,error:'synthetic send failure',requestId:'test'}};
+    f.emit({message_id:status,user_id:42,message:'hello'});await until(()=>f.store.listTraces('pet').some(x=>x.triggerId===status&&x.state==='send-failed'));
+    assert.equal(attempts,1);assert.equal(f.sent.length,0);
+    const trace=f.store.listTraces('pet').find(x=>x.triggerId===status);assert.equal(trace.diagnostics[0].code,status==='failed'?'QQ_SEND_FAILED':'QQ_SEND_UNCERTAIN');
+  }
 });
 
 
