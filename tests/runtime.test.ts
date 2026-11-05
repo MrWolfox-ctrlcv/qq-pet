@@ -69,6 +69,25 @@ test('PIC before AT sends the validated original without leaking tool markers; d
   assert.ok(f.models.kinds.includes('gallery-preview'));
 });
 
+for(const kind of ['sticker','gallery'] as const)test(`${kind}-only reply sends the previewed image without a false failure message`,async t=>{
+  let assetId='';const f=await fixture(t,{modelHandler:messages=>Array.isArray(messages[0]?.content)?JSON.stringify(kind==='sticker'?{id:assetId}:{description:'A yellow flower',ids:[assetId]}):kind==='sticker'?'[[STICKER: flower]]':`[[PIC: ${assetId}]]`});
+  const bytes=await sharp({create:{width:17,height:13,channels:3,background:'#f0c000'}}).png().toBuffer();
+  const asset=await f.store.importAsset('pet',{bytes,kind,category:kind==='sticker'?'reaction':'drawing',title:'flower',description:'yellow flower',scope:'public'});assetId=asset.id;
+  f.emit({message_id:`${kind}-only`,group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text:'发花的图片'}}]});await until(()=>f.sent.length===1);
+  const message=f.sent[0].message;assert.deepEqual(message.map((s:any)=>s.type),['image']);
+  assert.equal(Buffer.from(message[0].data.file.slice(9),'base64').compare(bytes),0);
+  assert.ok(f.models.kinds.includes(kind==='sticker'?'sticker-preview':'gallery-preview'));
+});
+
+test('fallback is sent only when no usable text, mention or media remains',async t=>{
+  let reply='[[STICKER: missing]]';const f=await fixture(t,{modelHandler:()=>reply});
+  for(const [id,text] of [['missing-sticker','发张表情'],['invalid-mention','你好']]){
+    if(id==='invalid-mention')reply='[[AT: 12345]]';
+    f.emit({message_id:id,group_id:7,user_id:42,message:[{type:'at',data:{qq:'999'}},{type:'text',data:{text}}]});await until(()=>f.sent.length===(id==='missing-sticker'?1:2));
+    assert.deepEqual(f.sent.at(-1).message,[{type:'text',data:{text:'暂时无法完成这项操作。'}}]);
+  }
+});
+
 test('generated image call requires explicit user drawing intent',async t=>{
   const f=await fixture(t,{modelHandler:()=> '[[IMG: a purple cat]]'});f.emit({message_id:'no-draw',user_id:42,message:[{type:'text',data:{text:'你好'}}]});await until(()=>f.sent.length===1);
   assert.equal(f.models.kinds.includes('drawing'),false);assert.equal(f.store.listAssets('pet',{kind:'gallery'}).length,0);assert.match(JSON.stringify(f.sent[0].message),/未明确要求新画/);

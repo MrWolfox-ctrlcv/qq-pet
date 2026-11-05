@@ -321,6 +321,7 @@ export class Runtime {
         for(let i=message.length-1;i>=0;i--)if(message[i].type==='at'&&!valid.has(String(message[i].data.qq)))message.splice(i,1);
       }catch{for(let i=message.length-1;i>=0;i--)if(message[i].type==='at')message.splice(i,1);}
     }
+    if(!message.length)message.push({type:'text',data:{text:'暂时无法完成这项操作。'}});
     const sendParams=trigger.chatType==='group'?{message_type:'group' as const,group_id:trigger.chatId.slice(6),message}:{message_type:'private' as const,user_id:trigger.authorId,message};
     if(!this.isCurrentRunner(petId,runner)||this.store.getPet(petId).accountId!==runner.transport.accountId||runner.transport.state!=='online'){
       this.store.db.prepare("UPDATE deliveries SET state='failed',receipt=?,updated_at=? WHERE pet_id=? AND chat_id=? AND source_id=? AND state='preparing'").run(JSON.stringify({status:'failed',error:'runtime generation/account changed before send'}),new Date().toISOString(),petId,trigger.chatId,trigger.sourceId);
@@ -429,6 +430,6 @@ export class Runtime {
     const cleaned=text.replace(/\[\[[\s\S]*?\]\]/g,marker=>/^\[\[AT:\s*\d+\s*\]\]$/.test(marker)?marker:'');
     const parts:Row[]=[];let cursor=0;const mentions=[...cleaned.matchAll(/\[\[AT:\s*(\d+)\s*\]\]/g)];
     for(const match of mentions.slice(0,3)){if((match.index||0)>cursor)parts.push({type:'text',data:{text:cleaned.slice(cursor,match.index)}});parts.push({type:'at',data:{qq:match[1]}});cursor=(match.index||0)+match[0].length;}
-    const tail=cleaned.slice(cursor).replace(/\[\[AT:\s*\d+\s*\]\]/g,'').trim();if(tail)parts.push({type:'text',data:{text:tail}});if(!parts.length)parts.push({type:'text',data:{text:'暂时无法完成这项操作。'}});return parts;
+    const tail=cleaned.slice(cursor).replace(/\[\[AT:\s*\d+\s*\]\]/g,'').trim();if(tail)parts.push({type:'text',data:{text:tail}});return parts;
   }
 }
